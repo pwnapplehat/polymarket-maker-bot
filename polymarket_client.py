@@ -25,7 +25,10 @@ class PolymarketClient:
                     host=Config.CLOB_URL,
                     key=private_key,
                     chain_id=137,  # Polygon mainnet
+                    signature_type=0,  # EOA/MetaMask signatures
                 )
+                # Set API credentials
+                self.client.set_api_creds(self.client.create_or_derive_api_creds())
                 logger.info("✅ Polymarket client initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Polymarket client: {e}")
@@ -48,6 +51,8 @@ class PolymarketClient:
             url = "https://gamma-api.polymarket.com/markets"
             response = requests.get(url, timeout=10)
             response.raise_for_status()
+            
+            markets = response.json()
             
             if active:
                 markets = [m for m in markets if m.get("active", False)]
