@@ -55,7 +55,12 @@ chmod +x emergency_stop.sh
 chmod +x deploy.sh
 chmod +x bot.py
 chmod +x test_connection.py
+chmod +x setup_allowances.py
 
+echo ""
+echo -e "${YELLOW}⚠️  IMPORTANT: MetaMask/EOA Wallet Users${NC}"
+echo -e "${YELLOW}Before live trading, you MUST set token allowances:${NC}"
+echo -e "${YELLOW}   python3 setup_allowances.py${NC}"
 echo ""
 echo -e "${GREEN}Step 8: Testing connection...${NC}"
 python3 test_connection.py
@@ -70,10 +75,14 @@ echo ""
 echo "1. Edit .env file:"
 echo "   nano .env"
 echo ""
-echo "2. Test bot in dry-run mode:"
+echo "2. ⚠️  CRITICAL - Set token allowances (MetaMask/EOA wallets only):"
+echo "   python3 setup_allowances.py"
+echo "   (Email/Magic wallets can skip this)"
+echo ""
+echo "3. Test bot in dry-run mode:"
 echo "   python3 bot.py"
 echo ""
-echo "3. Run bot in live mode:"
+echo "4. Run bot in live mode:"
 echo "   python3 bot.py --live"
 echo ""
 echo "4. Set up as systemd service (24/7 operation):"

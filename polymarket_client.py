@@ -44,12 +44,10 @@ class PolymarketClient:
             List of market dictionaries
         """
         try:
-            url = f"{Config.CLOB_URL}/markets"
+            # Use Gamma Markets API (CLOB API doesn't have /markets endpoint)
+            url = "https://gamma-api.polymarket.com/markets"
             response = requests.get(url, timeout=10)
             response.raise_for_status()
-            
-            data = response.json()
-            markets = data.get("data", [])
             
             if active:
                 markets = [m for m in markets if m.get("active", False)]
@@ -102,7 +100,7 @@ class PolymarketClient:
             response.raise_for_status()
             
             data = response.json()
-            fee_bps = int(data.get("feeRateBps", 0))
+            fee_bps = int(data.get("base_fee", 0))
             
             logger.debug(f"Token {token_id[:8]}...: {fee_bps} bps fee")
             return fee_bps
