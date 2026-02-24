@@ -33,6 +33,7 @@ class MakerStrategy:
         self.active_market = None
         self.active_token_id = None
         self.current_orders = []
+        self.last_btc_price = None  # Track last price for change detection
         
         # Performance tracking
         self.total_trades = 0
@@ -91,30 +92,80 @@ class MakerStrategy:
         logger.info(f"Selected market: {self.active_market.get('question', 'N/A')}")
         logger.info(f"Token ID: {self.active_token_id[:16] if self.active_token_id else 'N/A'}...")
     
-    def calculate_fair_price(self, btc_price, strike_price):
+    def should_requote(self, current_btc_price):
+        """
+        Determine if we should cancel/replace orders.
+        
+        Article recommendation: Requote on significant price changes to avoid adverse selection.
+        
+        Args:
+            current_btc_price: Current BTC price
+            
+        Returns:
+            True if should requote
+        """
+        # Always requote if we haven't quoted yet
+        if self.last_btc_price is None:
+            return True
+        
+        # Check time-based interval
+        elapsed = time.time() - self.last_cancel_replace
+        if elapsed >= Config.CANCEL_REPLACE_INTERVAL:
+            return True
+        
+        # Check price change threshold (article: requote on price movement)
+        price_change_pct = abs(current_btc_price - self.last_btc_price) / self.last_btc_price
+        if price_change_pct >= Config.QUOTE_REFRESH_ON_PRICE_CHANGE:
+            logger.info(f"Price changed {price_change_pct*100:.2f}% - triggering requote")
+            return True
+        
+        return False
+    
+    def calculate_fair_price(self, btc_price, strike_price, market_close_time=None):
+    def calculate_fair_price(self, btc_price, strike_price, market_close_time=None):
         """
         Calculate fair probability based on BTC price vs strike.
         
-        Simple logic:
-        - If BTC price is far above strike: YES probability high
-        - If BTC price is far below strike: YES probability low
+        Article insight: For 15-min markets, BTC direction becomes ~85% determined at T-10 seconds.
+        We use linear approximation for simplicity.
         
         Args:
             btc_price: Current BTC price (e.g., 83250)
             strike_price: Market strike price (e.g., 83000)
+            market_close_time: Optional market close timestamp (for future T-10s logic)
             
         Returns:
             Fair YES price between 0.01 and 0.99
         """
-        # Calculate price difference ratio
+        # Calculate price difference
         diff = btc_price - strike_price
         
-        # Simple linear model (adjust based on backtesting)
-        # For every $100 above/below strike, adjust probability by 1%
-        prob_adjustment = diff / 100 * 0.01
-        
-        # Base probability = 0.5 (50/50)
-        fair_price = 0.5 + prob_adjustment
+        # For 15-min markets: Use aggressive pricing model
+        # If BTC is $100 above strike → ~60% probability
+        # If BTC is $500 above strike → ~90% probability
+        if diff > 0:
+            # Above strike - higher YES probability
+            if diff >= 500:
+                fair_price = 0.90
+            elif diff >= 300:
+                fair_price = 0.75
+            elif diff >= 100:
+                fair_price = 0.60
+            else:
+                # Small difference: linear scale from 0.50 to 0.60
+                fair_price = 0.50 + (diff / 100) * 0.10
+        else:
+            # Below strike - lower YES probability
+            abs_diff = abs(diff)
+            if abs_diff >= 500:
+                fair_price = 0.10
+            elif abs_diff >= 300:
+                fair_price = 0.25
+            elif abs_diff >= 100:
+                fair_price = 0.40
+            else:
+                # Small difference: linear scale from 0.50 to 0.40
+                fair_price = 0.50 - (abs_diff / 100) * 0.10
         
         # Clamp to valid range [0.01, 0.99]
         fair_price = max(0.01, min(0.99, fair_price))
@@ -123,9 +174,13 @@ class MakerStrategy:
     
     def quote_orders(self):
         """
-        Quote BUY/SELL orders on Polymarket based on current BTC price.
+        Quote BUY/SELL maker orders on Polymarket.
         
-        This is called every CANCEL_REPLACE_INTERVAL seconds.
+        Article strategy:
+        1. Post maker orders on both sides (BUY + SELL)
+        2. Earn 20% of taker fees as daily rebates
+        3. Avoid 50% probability (1.56% max fee zone)
+        4. Cancel/replace on price changes
         """
         # Get current BTC price
         btc_price = self.binance_feed.get_price()
@@ -135,7 +190,6 @@ class MakerStrategy:
             return
         
         # Parse strike price from market question
-        # Example: "Will BTC be above $83,000 at 3:15 PM?"
         question = self.active_market.get("question", "")
         strike_price = self.extract_strike_price(question)
         
@@ -146,9 +200,26 @@ class MakerStrategy:
         # Calculate fair YES price
         fair_price = self.calculate_fair_price(btc_price, strike_price)
         
+        # CRITICAL: Check if we have enough edge to overcome fees
+        # Article: Max fee is 1.56% at p=0.50
+        # We need edge > 2% to be safe (MIN_EDGE_BPS = 200)
+        min_edge = Config.MIN_EDGE_BPS / 10000.0
+        
+        # Check distance from 50% (danger zone)
+        distance_from_50 = abs(fair_price - 0.50)
+        
+        if distance_from_50 < (min_edge / 2):
+            logger.warning(f"Fair price {fair_price:.3f} too close to 50% (high fee zone) - skipping")
+            logger.warning(f"Need at least {min_edge*100:.1f}% edge, have {distance_from_50*100:.1f}%")
+            # Cancel existing orders but don't place new ones
+            for order_id in self.current_orders:
+                self.client.cancel_order(order_id)
+            self.current_orders.clear()
+            return
+        
         # Apply spread
         spread_bps = Config.SPREAD_BPS
-        spread = spread_bps / 10000.0  # Convert basis points to decimal
+        spread = spread_bps / 10000.0
         
         buy_price = fair_price - spread / 2
         sell_price = fair_price + spread / 2
@@ -161,14 +232,17 @@ class MakerStrategy:
         position_size = Config.MAX_POSITION_SIZE
         
         logger.info(f"BTC: ${btc_price:,.2f} | Strike: ${strike_price:,.0f} | Fair: ${fair_price:.3f}")
-        logger.info(f"Quoting: BUY ${buy_price:.3f} | SELL ${sell_price:.3f}")
+        logger.info(f"Edge: {distance_from_50*100:.1f}% | Quoting: BUY ${buy_price:.3f} | SELL ${sell_price:.3f}")
         
-        # STEP 1: Cancel existing orders
+        # STEP 1: Cancel existing orders (article: fast cancel/replace)
+        cancel_start = time.time()
         for order_id in self.current_orders:
             self.client.cancel_order(order_id)
         self.current_orders.clear()
+        cancel_time_ms = (time.time() - cancel_start) * 1000
         
-        # STEP 2: Create new orders
+        # STEP 2: Create new maker orders (article: post on both sides)
+        create_start = time.time()
         buy_order_id = self.client.create_maker_order(
             token_id=self.active_token_id,
             side="BUY",
@@ -182,6 +256,7 @@ class MakerStrategy:
             price=sell_price,
             size=position_size
         )
+        create_time_ms = (time.time() - create_start) * 1000
         
         # Track new orders
         if buy_order_id:
@@ -189,7 +264,12 @@ class MakerStrategy:
         if sell_order_id:
             self.current_orders.append(sell_order_id)
         
+        total_loop_ms = cancel_time_ms + create_time_ms
+        logger.debug(f"Cancel/replace loop: {total_loop_ms:.0f}ms (cancel: {cancel_time_ms:.0f}ms, create: {create_time_ms:.0f}ms)")
+        
+        # Update tracking
         self.last_cancel_replace = time.time()
+        self.last_btc_price = btc_price
     
     def extract_strike_price(self, question):
         """
@@ -215,21 +295,33 @@ class MakerStrategy:
         return None
     
     def run(self):
-        """Main strategy loop."""
+        """
+        Main strategy loop.
+        
+        Article strategy:
+        - Monitor Binance WebSocket for BTC price
+        - Requote on price changes OR time interval
+        - Fast cancel/replace loop
+        - Avoid 50% probability (high fee zone)
+        """
         try:
             self.start()
             
             logger.info("Entering main loop...")
+            logger.info("Strategy: Maker bot for 15-min BTC markets")
+            logger.info("- Requote interval: {}s".format(Config.CANCEL_REPLACE_INTERVAL))
+            logger.info("- Price change trigger: {:.1f}%".format(Config.QUOTE_REFRESH_ON_PRICE_CHANGE * 100))
+            logger.info("- Min edge required: {:.1f}%".format(Config.MIN_EDGE_BPS / 100))
             
             while True:
-                # Check if it's time to cancel/replace
-                elapsed = time.time() - self.last_cancel_replace
+                # Get current BTC price
+                btc_price = self.binance_feed.get_price()
                 
-                if elapsed >= Config.CANCEL_REPLACE_INTERVAL:
+                if btc_price and self.should_requote(btc_price):
                     self.quote_orders()
                 
-                # Sleep briefly
-                time.sleep(1)
+                # Sleep briefly (article: tight loop for 15-min markets)
+                time.sleep(0.5)
                 
         except KeyboardInterrupt:
             logger.info("Received stop signal")
