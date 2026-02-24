@@ -1,6 +1,6 @@
-py-clob-client>=0.34.0
-websocket-client>=1.9.0
-python-binance>=1.0.35
-python-dotenv>=1.2.0
-eth-account>=0.13.0
-requests>=2.31.0
+py-clob-client==0.34.2
+websocket-client==1.9.0
+python-binance==1.0.35
+python-dotenv==1.2.0
+eth-account==0.13.4
+requests==2.31.0

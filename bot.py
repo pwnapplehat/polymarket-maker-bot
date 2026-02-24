@@ -5,6 +5,8 @@ import time
 import signal
 from config import Config
 from logger import logger
+from polymarket_client import PolymarketClient
+from maker_strategy import MakerStrategy
 
 class PolymarketMakerBot:
     """Main bot orchestrator."""
@@ -35,6 +37,13 @@ class PolymarketMakerBot:
             logger.error("PRIVATE_KEY required for live mode")
             logger.error("Edit .env file and add your MetaMask private key")
             sys.exit(1)
+        
+        # Initialize Polymarket client
+        private_key = Config.PRIVATE_KEY if not Config.ENABLE_DRY_RUN else None
+        self.client = PolymarketClient(private_key=private_key)
+        
+        # Initialize maker strategy
+        self.strategy = MakerStrategy(self.client, target_market_duration="15m")
     
     def start(self):
         """Start the bot."""
@@ -67,34 +76,12 @@ class PolymarketMakerBot:
     
     def _run_loop(self):
         """Main bot loop."""
-        iteration = 0
-        
-        while self.running:
-            iteration += 1
-            
-            try:
-                # TODO: Implement actual trading logic
-                # For now, just simulate monitoring
-                
-                logger.info(f"Iteration {iteration}: Monitoring markets...")
-                
-                # Check safety limits
-                if self.daily_pnl < -Config.MAX_DAILY_LOSS:
-                    logger.warning(f"Daily loss limit reached: ${-self.daily_pnl:.2f}")
-                    logger.warning("Stopping bot for safety")
-                    break
-                
-                if self.daily_trades >= Config.MAX_DAILY_TRADES:
-                    logger.warning(f"Daily trade limit reached: {self.daily_trades}")
-                    logger.warning("Stopping bot for safety")
-                    break
-                
-                # Sleep until next cycle
-                time.sleep(Config.CANCEL_REPLACE_INTERVAL)
-                
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}", exc_info=True)
-                time.sleep(5)  # Wait before retrying
+        # Start the maker strategy
+        try:
+            self.strategy.run()
+        except Exception as e:
+            logger.error(f"Strategy error: {e}", exc_info=True)
+            raise
     
     def stop(self):
         """Stop the bot gracefully."""

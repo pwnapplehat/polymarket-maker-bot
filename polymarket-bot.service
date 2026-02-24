@@ -1,0 +1,22 @@
+[Unit]
+Description=Polymarket Maker Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/openclaw/workspace/polymarket-maker-bot
+Environment="PATH=/opt/openclaw/workspace/polymarket-maker-bot/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/opt/openclaw/workspace/polymarket-maker-bot/venv/bin/python bot.py --live
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Safety: restart on crash but not too frequently
+StartLimitInterval=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

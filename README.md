@@ -2,6 +2,38 @@
 
 Automated market maker bot for Polymarket following Feb 2026 rules (500ms delay removed).
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Binance WebSocket → BTC Price Feed (Real-time)        │
+└────────────┬────────────────────────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────────────────────────┐
+│  Maker Strategy → Calculate Fair Price + Spread         │
+└────────────┬────────────────────────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────────────────────────┐
+│  Polymarket CLOB → Cancel Old Orders + Create New       │
+│  (with fee-aware EIP-712 signing)                       │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Files
+
+- `bot.py` - Main entry point
+- `config.py` - Configuration from `.env`
+- `logger.py` - Structured logging
+- `polymarket_client.py` - Polymarket CLOB API wrapper (fee-aware signing)
+- `binance_feed.py` - Binance WebSocket price feed
+- `maker_strategy.py` - Market making logic
+- `test_connection.py` - Pre-deployment connectivity test
+- `deploy.sh` - Automated deployment script
+- `emergency_stop.sh` - Emergency bot shutdown
+- `polymarket-bot.service` - systemd service for 24/7 operation
+
 ## Quick Start
 
 ### 1. Install Dependencies
