@@ -122,7 +122,6 @@ class MakerStrategy:
         return False
     
     def calculate_fair_price(self, btc_price, strike_price, market_close_time=None):
-    def calculate_fair_price(self, btc_price, strike_price, market_close_time=None):
         """
         Calculate fair probability based on BTC price vs strike.
         
